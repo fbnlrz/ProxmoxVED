@@ -53,6 +53,9 @@ else
   CROWDSEC_MACHINE_ID="traefik-manager"
 fi
 
+read -r -p "${TAB3}Enable the CrowdSec bouncer to actively block malicious requests? (y/N): " BOUNCER_ANSWER
+if [[ "${BOUNCER_ANSWER,,}" == "y" || "${BOUNCER_ANSWER,,}" == "yes" ]]; then BOUNCER_ENABLED=1; else BOUNCER_ENABLED=0; fi
+
 UV_PYTHON="3.12" setup_uv
 
 if [ "$(dpkg --print-architecture)" = "arm64" ]; then
@@ -72,6 +75,19 @@ if [[ "$CROWDSEC_MODE" == "local" ]]; then
     "bookworm"
   $STD apt install -y crowdsec
   msg_ok "Installed CrowdSec"
+fi
+
+if [[ "$BOUNCER_ENABLED" == "1" ]]; then
+  if [[ "$CROWDSEC_MODE" == "local" ]]; then
+    BOUNCER_LAPI_KEY=$(cscli bouncers add traefik-bouncer -o raw)
+    BOUNCER_LAPI_HOST="127.0.0.1:8080"
+    BOUNCER_LAPI_SCHEME="http"
+  else
+    BOUNCER_LAPI_KEY="$CROWDSEC_BOUNCER_KEY"
+    BOUNCER_LAPI_SCHEME="${CROWDSEC_LAPI_URL%%://*}"
+    _rest="${CROWDSEC_LAPI_URL#*://}"
+    BOUNCER_LAPI_HOST="${_rest%%/*}"
+  fi
 fi
 
 msg_info "Configuring Traefik"
@@ -131,10 +147,22 @@ if [[ "$TLS_ENABLED" == "1" ]]; then
   touch /etc/traefik/acme.json
   chmod 600 /etc/traefik/acme.json
 fi
+if [[ "$BOUNCER_ENABLED" == "1" ]]; then
+  cat <<EOF >>/etc/traefik/traefik.yml
+
+experimental:
+  plugins:
+    crowdsec:
+      moduleName: github.com/maxlerebourg/crowdsec-bouncer-traefik-plugin
+      version: v1.6.0
+EOF
+fi
 
 if [[ -n "$TM_SELF_DOMAIN" ]]; then
   TM_TLS_YAML=""
   [[ "$TLS_ENABLED" == "1" ]] && TM_TLS_YAML=$'\n      tls:\n        certResolver: letsencrypt'
+  TM_MW_YAML=""
+  [[ "$BOUNCER_ENABLED" == "1" ]] && TM_MW_YAML=$'\n      middlewares:\n        - crowdsec'
   cat <<EOF >/etc/traefik/dynamic.yml
 http:
   routers:
@@ -142,19 +170,34 @@ http:
       rule: "Host(\`${TM_SELF_DOMAIN}\`)"
       entryPoints:
         - ${TM_ENTRYPOINT}
-      service: traefik-manager${TM_TLS_YAML}
+      service: traefik-manager${TM_MW_YAML}${TM_TLS_YAML}
   services:
     traefik-manager:
       loadBalancer:
         servers:
           - url: "http://127.0.0.1:5000"
-  middlewares: {}
 EOF
 else
   cat <<EOF >/etc/traefik/dynamic.yml
 http:
   routers: {}
   services: {}
+EOF
+fi
+if [[ "$BOUNCER_ENABLED" == "1" ]]; then
+  cat <<EOF >>/etc/traefik/dynamic.yml
+  middlewares:
+    crowdsec:
+      plugin:
+        crowdsec:
+          enabled: true
+          crowdsecMode: live
+          crowdsecLapiScheme: ${BOUNCER_LAPI_SCHEME}
+          crowdsecLapiHost: ${BOUNCER_LAPI_HOST}
+          crowdsecLapiKey: ${BOUNCER_LAPI_KEY}
+EOF
+else
+  cat <<EOF >>/etc/traefik/dynamic.yml
   middlewares: {}
 EOF
 fi
@@ -322,6 +365,12 @@ if [[ "$TLS_ENABLED" == "1" ]]; then TM_SCHEME="https"; else TM_SCHEME="http"; f
   echo "  Bouncer API key: ${CROWDSEC_BOUNCER_KEY}"
   echo "  Machine ID: ${CROWDSEC_MACHINE_ID}"
   echo "  Machine password: ${CROWDSEC_MACHINE_PASSWORD}"
+  if [[ "$BOUNCER_ENABLED" == "1" ]]; then
+    echo "  Enforcement bouncer: enabled (Traefik middleware 'crowdsec')"
+    echo "  Bouncer plugin key: ${BOUNCER_LAPI_KEY}"
+  else
+    echo "  Enforcement bouncer: disabled (detection/visibility only)"
+  fi
 } >/root/traefik-manager.creds
 
 motd_ssh

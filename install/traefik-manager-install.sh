@@ -16,7 +16,30 @@ update_os
 # ------------------------------------------------------------------
 # Interactive configuration
 # ------------------------------------------------------------------
-read -r -p "${TAB3}Domain for Traefik Manager (blank = use container IP): " TM_DOMAIN
+read -r -p "${TAB3}Base domain for new routes (Add Route form, blank = use container IP): " TM_DOMAIN
+read -r -p "${TAB3}Domain to expose the Traefik Manager UI itself (blank = reach it on IP:5000 only): " TM_SELF_DOMAIN
+read -r -p "${TAB3}Enable HTTPS via Let's Encrypt for Traefik? (y/N): " TLS_ANSWER
+if [[ "${TLS_ANSWER,,}" == "y" || "${TLS_ANSWER,,}" == "yes" ]]; then
+  read -r -p "${TAB3}ACME email address: " ACME_EMAIL
+  read -r -p "${TAB3}ACME challenge - 1) HTTP  2) Cloudflare DNS [1]: " ACME_CHALLENGE
+  if [[ "$ACME_CHALLENGE" == "2" ]]; then
+    read -r -p "${TAB3}Cloudflare DNS API token: " CF_DNS_TOKEN
+    ACME_MODE="dns"
+  else
+    ACME_MODE="http"
+  fi
+  TLS_ENABLED=1
+  CERT_RESOLVER="letsencrypt"
+  ACME_JSON_PATH="/etc/traefik/acme.json"
+  CERTS_TAB="true"
+else
+  TLS_ENABLED=0
+  CERT_RESOLVER="none"
+  ACME_JSON_PATH=""
+  CERTS_TAB="false"
+fi
+if [[ "$TLS_ENABLED" == "1" ]]; then TM_ENTRYPOINT="websecure"; else TM_ENTRYPOINT="web"; fi
+
 read -r -p "${TAB3}Connect to an EXISTING CrowdSec instance instead of installing one? (y/N): " CS_ANSWER
 if [[ "${CS_ANSWER,,}" == "y" || "${CS_ANSWER,,}" == "yes" ]]; then
   CROWDSEC_MODE="existing"
@@ -81,12 +104,63 @@ providers:
 log:
   level: INFO
 EOF
-cat <<EOF >/etc/traefik/dynamic.yml
+if [[ "$TLS_ENABLED" == "1" && "$ACME_MODE" == "dns" ]]; then
+  cat <<EOF >>/etc/traefik/traefik.yml
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: ${ACME_EMAIL}
+      storage: /etc/traefik/acme.json
+      dnsChallenge:
+        provider: cloudflare
+EOF
+elif [[ "$TLS_ENABLED" == "1" ]]; then
+  cat <<EOF >>/etc/traefik/traefik.yml
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: ${ACME_EMAIL}
+      storage: /etc/traefik/acme.json
+      httpChallenge:
+        entryPoint: web
+EOF
+fi
+if [[ "$TLS_ENABLED" == "1" ]]; then
+  touch /etc/traefik/acme.json
+  chmod 600 /etc/traefik/acme.json
+fi
+
+if [[ -n "$TM_SELF_DOMAIN" ]]; then
+  TM_TLS_YAML=""
+  [[ "$TLS_ENABLED" == "1" ]] && TM_TLS_YAML=$'\n      tls:\n        certResolver: letsencrypt'
+  cat <<EOF >/etc/traefik/dynamic.yml
+http:
+  routers:
+    traefik-manager:
+      rule: "Host(\`${TM_SELF_DOMAIN}\`)"
+      entryPoints:
+        - ${TM_ENTRYPOINT}
+      service: traefik-manager${TM_TLS_YAML}
+  services:
+    traefik-manager:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:5000"
+  middlewares: {}
+EOF
+else
+  cat <<EOF >/etc/traefik/dynamic.yml
 http:
   routers: {}
   services: {}
   middlewares: {}
 EOF
+fi
+
+TRAEFIK_ENV=""
+[[ "$TLS_ENABLED" == "1" && "$ACME_MODE" == "dns" ]] && TRAEFIK_ENV="Environment=CF_DNS_API_TOKEN=${CF_DNS_TOKEN}"
 cat <<EOF >/etc/systemd/system/traefik.service
 [Unit]
 Description=Traefik
@@ -94,6 +168,7 @@ After=network.target
 
 [Service]
 Type=simple
+${TRAEFIK_ENV}
 ExecStart=/opt/traefik/traefik --configFile=/etc/traefik/traefik.yml
 Restart=on-failure
 RestartSec=5
@@ -169,8 +244,9 @@ PASSWORD_HASH=$(/opt/traefik-manager/.venv/bin/python -c "import bcrypt, sys; pr
 cat <<EOF >/var/lib/traefik-manager/manager.yml
 domains:
   - ${TM_DOMAIN:-$LOCAL_IP}
-cert_resolver: none
+cert_resolver: ${CERT_RESOLVER}
 traefik_api_url: http://127.0.0.1:8081
+acme_json_path: ${ACME_JSON_PATH}
 access_log_path: /var/log/traefik/access.log
 static_config_path: /etc/traefik/traefik.yml
 auth_enabled: true
@@ -183,7 +259,17 @@ visible_tabs:
   routemap: true
   logs: true
   plugins: true
+  certs: ${CERTS_TAB}
 EOF
+if [[ -n "$TM_SELF_DOMAIN" ]]; then
+  cat <<EOF >>/var/lib/traefik-manager/manager.yml
+self_route:
+  domain: ${TM_SELF_DOMAIN}
+  service_url: http://127.0.0.1:5000
+  router_name: traefik-manager
+  entry_point: ${TM_ENTRYPOINT}
+EOF
+fi
 msg_ok "Preconfigured Traefik Manager"
 
 msg_info "Creating Service"
@@ -220,9 +306,11 @@ EOF
 systemctl enable -q --now traefik-manager
 msg_ok "Created Service"
 
+if [[ "$TLS_ENABLED" == "1" ]]; then TM_SCHEME="https"; else TM_SCHEME="http"; fi
 {
   echo "Traefik Manager"
   echo "  URL: http://${LOCAL_IP}:5000"
+  [[ -n "$TM_SELF_DOMAIN" ]] && echo "  Domain URL: ${TM_SCHEME}://${TM_SELF_DOMAIN}"
   echo "  Password: ${ADMIN_PASSWORD}"
   echo "  Note: you must set a new password on first login"
   echo ""

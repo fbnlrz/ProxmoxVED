@@ -22,11 +22,13 @@ else
 fi
 
 msg_info "Installing CrowdSec"
+# CrowdSec does not publish a Debian 13 (trixie) repo yet; its bookworm build
+# is a static Go binary and runs fine on trixie.
 setup_deb822_repo \
   "crowdsec" \
   "https://packagecloud.io/crowdsec/crowdsec/gpgkey" \
   "https://packagecloud.io/crowdsec/crowdsec/debian" \
-  "trixie"
+  "bookworm"
 $STD apt install -y crowdsec
 msg_ok "Installed CrowdSec"
 

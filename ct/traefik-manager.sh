@@ -45,6 +45,16 @@ function update_script() {
     msg_ok "Started Traefik"
   fi
 
+  if command -v cscli >/dev/null 2>&1; then
+    msg_info "Updating CrowdSec"
+    $STD apt update
+    $STD apt install --only-upgrade -y crowdsec
+    $STD cscli hub update
+    $STD cscli hub upgrade
+    systemctl restart crowdsec
+    msg_ok "Updated CrowdSec"
+  fi
+
   if check_for_gh_release "traefik-manager" "chr0nzz/traefik-manager"; then
     msg_info "Stopping Traefik Manager"
     systemctl stop traefik-manager
@@ -80,7 +90,7 @@ echo -e "${INFO}${YW}Access the management UI using the following URL:${CL}"
 echo -e "${GATEWAY}${BGN}http://${IP}:5000${CL}"
 echo -e "${INFO}${YW}Access the Traefik dashboard using the following URL:${CL}"
 echo -e "${GATEWAY}${BGN}http://${IP}:8081${CL}"
-echo -e "${INFO}${YW}CrowdSec credentials and access details saved to:${CL}"
+echo -e "${INFO}${YW}Login password (you must change it on first login):${CL}"
+echo -e "${GATEWAY}${BGN}$(pct exec "${CTID}" -- sed -n 's/^  Password: //p' /root/traefik-manager.creds)${CL}"
+echo -e "${INFO}${YW}All credentials (incl. CrowdSec) saved to:${CL}"
 echo -e "${GATEWAY}${BGN}/root/traefik-manager.creds${CL}"
-echo -e "${INFO}${YW}The admin password is auto-generated on first start - retrieve it with:${CL}"
-echo -e "${GATEWAY}${BGN}journalctl -u traefik-manager | grep -A3 AUTO-GENERATED${CL}"

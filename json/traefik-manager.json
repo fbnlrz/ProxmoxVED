@@ -1,0 +1,50 @@
+{
+  "name": "Traefik-Manager",
+  "slug": "traefik-manager",
+  "categories": [
+    21,
+    6
+  ],
+  "date_created": "2026-07-20",
+  "type": "ct",
+  "updateable": true,
+  "privileged": false,
+  "has_arm": true,
+  "interface_port": 5000,
+  "documentation": "https://traefik-manager.xyzlab.dev/",
+  "website": "https://github.com/chr0nzz/traefik-manager",
+  "logo": "https://cdn.jsdelivr.net/gh/selfhst/icons@main/webp/traefik-manager.webp",
+  "config_path": "/var/lib/traefik-manager/manager.yml",
+  "description": "Traefik Manager is a clean, self-hosted web UI for managing a Traefik reverse proxy. This LXC installs Traefik and CrowdSec alongside the manager: routes, services and middlewares are edited from the browser and applied to the local Traefik instance, while CrowdSec parses the Traefik access log and its decisions and alerts are surfaced and managed directly from the CrowdSec tab.",
+  "install_methods": [
+    {
+      "type": "default",
+      "script": "ct/traefik-manager.sh",
+      "resources": {
+        "cpu": 2,
+        "ram": 2048,
+        "hdd": 6,
+        "os": "Debian",
+        "version": "13"
+      }
+    }
+  ],
+  "default_credentials": {
+    "username": null,
+    "password": null
+  },
+  "notes": [
+    {
+      "text": "On first visit the setup wizard prompts you to create the admin account. Open the UI immediately after install to secure it.",
+      "type": "warning"
+    },
+    {
+      "text": "All-in-one: management UI on port 5000, Traefik dashboard on 8081, proxy entrypoints on 80/443, CrowdSec LAPI on 8080 (local only). Config lives in /etc/traefik.",
+      "type": "info"
+    },
+    {
+      "text": "CrowdSec is pre-wired: the bouncer key and machine credentials are injected into the service, so the CrowdSec tab (decisions, alerts, unban) works out of the box. Enable it under Settings. Enforcement (blocking) still requires adding the CrowdSec bouncer middleware to your routers.",
+      "type": "info"
+    }
+  ]
+}
